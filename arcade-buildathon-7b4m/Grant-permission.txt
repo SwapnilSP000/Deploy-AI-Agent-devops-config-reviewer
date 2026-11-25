@@ -1,0 +1,59 @@
+In this step, you run one block that checks your project, enables the APIs your agent needs, and grants permissions to your agent and to the review team.
+
+
+
+Click back into the Cloud Shell terminal (>_). Copy and paste everything from the START line to the END line into the terminal and press Enter to run it. It's safe to run again, even if some of these already exist:
+
+sp() {
+  m=$1; shift; touch /tmp/sp.on
+  ( f=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏); i=0; while [ -f /tmp/sp.on ]; do printf "\r%s %s " "${f[i++%10]}" "$m"; sleep 0.2; done & )
+  trap 'rm -f /tmp/sp.on' INT
+  "$@" >/tmp/s3.log 2>&1; s=$?
+  rm -f /tmp/sp.on; trap - INT; sleep 0.3; printf "\r\033[K"; return $s
+  }
+  s3() {
+  ER=
+  P=$(gcloud config get-value project 2>/dev/null)
+  A=$(gcloud config get-value account 2>/dev/null)
+  [ -z "$P" ] && { echo "❌ No project selected. Select your project in Cloud Shell, then run this block again."; return; }
+  if ! sp "Enabling the APIs for $P" gcloud services enable compute.googleapis.com aiplatform.googleapis.com cloudbilling.googleapis.com; then
+  echo "❌ Could not enable the APIs:"; tail -n 5 /tmp/s3.log
+  echo "If it mentions billing, link your credit: https://console.cloud.google.com/billing/linkedaccount?project=$P"; return
+  fi
+  SA=$(gcloud projects describe $P --format='value(projectNumber)')-compute@developer.gserviceaccount.com
+  wsa() { for i in {1..12}; do gcloud iam service-accounts describe $SA && return; sleep 5; done; }
+  sp "Waiting for your agent's service account" wsa
+  
+  chk() {
+  l=$1 m=$2; shift 2; n=0 x=
+  for r; do
+  if grep -qixF "$m $r" <<<"$T"; then ((n++)); else x+=" $r"
+  [ $G ] && { O=$(gcloud projects add-iam-policy-binding $P --member=$m --role=roles/$r --condition=None 2>&1 >/dev/null) || ER=$O; }
+  fi
+  done
+  [ -n "$x" ] && F=1; [ $G ] && return
+  c=; (($#>1)) && c=" ($n/$#)"
+  [ -z "$x" ] && echo "✅ $l$c" || echo "❌ $l${c:+, missing:$x}"
+  }
+  rd() {
+  G=$1 F=
+  T=$(gcloud projects get-iam-policy $P --flatten='bindings[].members' --format='value(bindings.members,bindings.role)' 2>/dev/null | sed 's#\troles/# #')
+  if [ -z "$G" ]; then
+  B=$(gcloud billing projects describe $P --format='value(billingAccountName)' 2>/dev/null | sed 's#.*/##')
+  N=$([ -n "$B" ] && gcloud billing accounts describe $B --format='value(displayName)' 2>/dev/null)
+  [ -n "$B" ] && echo "✅ Billing linked: ${N:-$B}" || { echo "❌ No billing account linked to $P"; F=1; }
+  T+=$'\n'$(gcloud services list --enabled --format='value(config.name)' 2>/dev/null | sed 's/^/api /;s/\.googleapis\.com$//')
+  chk "Your account is Owner" user:$A owner
+  chk "APIs enabled" api compute aiplatform
+  fi
+  chk "Agent permissions" serviceAccount:$SA run.builder aiplatform.user
+  chk "Review team access" group:arcade-agent-verifier@google.com serviceusage.serviceUsageViewer run.viewer browser
+  }
+  gr() { for t in {1..6}; do rd g; [ -z "$F" ] && return; ((t<6)) && sleep 10; done; }
+  sp "Granting permissions" gr
+  echo "📋 Summary for project $P:"; rd
+  [ -n "$F" ] && [ -n "$ER" ] && { echo "Last error:"; echo "$ER" | tail -n 3; }
+  [ -z "$F" ] && echo "🏁 All done! Go back to the course and continue to the next step." || echo "⚠️ Run this block again. If a ❌ stays, see the Troubleshooting FAQ."
+  }
+  s3
+  # ---- END: 

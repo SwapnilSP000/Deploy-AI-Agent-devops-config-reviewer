@@ -1,0 +1,58 @@
+ Deploy to Cloud Run
+Your agent is built, now let's take it live! Once it's deployed on Cloud Run, it runs on its own and you can open it from any browser. It has two built-in limits: up to 20 messages per minute, and a total usage cap that keeps enough credit for the verification.
+
+
+
+1. Click back into the Cloud Shell terminal (>_). Copy and paste everything from the START line to the END line into the terminal and press Enter to run it:
+# ---- START: copy from here ----
+mkdir -p ~/arcade-buildathon-7b4m && cd ~/arcade-buildathon-7b4m
+[ -f ~/.arcade-agent-verify-token ] || openssl rand -hex 16 > ~/.arcade-agent-verify-token
+VERIFY_TOKEN=$(cat ~/.arcade-agent-verify-token)
+L=/tmp/arcade_step.log
+
+sp() {
+m=$1; shift; touch /tmp/sp.on
+( f=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏); i=0 b=$SECONDS; while [ -f /tmp/sp.on ]; do e=$((SECONDS-b)); printf "\r%s %s %d:%02d " "${f[i++%10]}" "$m" $((e/60)) $((e%60)); sleep 0.2; done & )
+trap 'rm -f /tmp/sp.on' INT
+"$@" >$L 2>&1; s=$?
+rm -f /tmp/sp.on; trap - INT; sleep 0.3; printf "\r\033[K"; return $s
+}
+
+s5() {
+[ -f main.py ] || { echo "❌ main.py not found. Create it first."; return; }
+h() { for x; do grep -qixF "$x" <<<"$T" || printf " %s" "${x##* }"; done; }
+ck() {
+P=$(gcloud config get-value project)
+a="serviceAccount:$(gcloud projects describe $P --format='value(projectNumber)')-compute@developer.gserviceaccount.com "
+T=$(gcloud projects get-iam-policy $P --flatten='bindings[].members' --format='value(bindings.members,bindings.role)' | sed 's#\troles/# #')
+M=$(h "$a"{run.builder,aiplatform.user} "group:arcade-agent-verifier@google.com "{serviceusage.serviceUsageViewer,run.viewer,browser}) K=
+if grep -q bigquery main.py; then
+C=$(bq show --connection --format=json us-central1.vertex_ai_conn | jq -r '.cloudResource.serviceAccountId // empty')
+[ -z "$C" ] && K+=" vertex_ai_conn"
+K+=$(h "$a"{bigquery.jobUser,bigquery.dataViewer,bigquery.connectionUser} "serviceAccount:$C aiplatform.user")
+bq show arcade_knowledge.badge_embeddings || K+=" badge_embeddings"
+fi
+}
+sp "Checking your project setup" ck
+[ -n "$M" ] && echo "❌ Setup not complete, missing:$M. Run the permissions block again."
+[ -n "$K" ] && echo "❌ Knowledge base not ready, missing:$K. Run Step A of your path guide again."
+[ -n "$M$K" ] && return
+echo "✅ Project setup confirmed"
+
+sp "Turning on Cloud Run..." gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com || { echo "❌ Could not turn on Cloud Run:"; tail -n 5 $L; return; }
+echo "✅ Services ready"
+echo "⏳ The deploy takes up to 10 minutes. Keep this tab open and wait for ✅ Done!"
+for t in 1 2 3; do
+sp "Deploying your agent, up to 10 min" gcloud run deploy arcade-agent --source . --region us-central1 --no-invoker-iam-check --max-instances=1 --set-env-vars VERIFY_TOKEN=$VERIFY_TOKEN --quiet && { echo "✅ Done! Your agent is live."; echo "Service URL: $(grep -o 'https://[^ ]*run\.app' $L | tail -n 1)"; return; }
+grep -q "missing required IAM permissions" $L && ((t<3)) || break
+cp $L /tmp/d.log; sp "Activating your permissions" sleep 30; cp /tmp/d.log $L
+done
+if grep -q "refreshing your current auth tokens" $L; then
+echo "❌ Cloud Shell lost its sign-in. Reopen it and run this block again."
+else
+echo "❌ Something went wrong:"; tail -n 15 $L
+echo "See the Troubleshooting FAQ or run this block again."
+fi
+}
+s5
+# ---- END: copy till here ----
